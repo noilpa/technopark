@@ -1,0 +1,27 @@
+{
+    "operation":"select",
+    "db":"db",
+    "schema":"company",
+    "table":"jobs",
+    "ucolumn":
+    [
+        {
+            "name":"job_title",
+            "value":"troll"
+        },
+        {
+            "name":"max_salary",
+            "value":"777"
+        }
+    ],
+    "column":
+     [
+         "job_id",
+         "job_title"
+     ],
+    "condition":
+    {
+        "name":"job_id",
+        "value":"2"
+    }
+}
