@@ -4,16 +4,20 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	_ "encoding/json"
+	_ "log"
 )
 
+type ResponseType int
 const (
-	StringArray = 0
+	StringArray ResponseType = 0
 	DictArray   = 1
 	Dict        = 2
 )
 
+type RequestType int
 const (
-	DatabasesList  = 0
+	DatabasesList RequestType  = 0
 	TablesList     = 1
 	WholeTable     = 2
 	TableQuery     = 3
@@ -26,29 +30,44 @@ const (
 	RemoveDatabase = 10
 )
 
+type ConditionOperation int
 const (
-	Less        = 0
+	Less ConditionOperation = 0
 	LessOrEqual = 1
 	More        = 2
 	MoreOrEqual = 3
 	Equal       = 4
 )
 
+type ParameterKey string
+const (
+	DatabaseName      = "DatabaseName"
+	TableName         = "TableName"
+	ElementIdentifier = "ElementIdentifier"
+)
+
+type TableField struct  {
+	fieldName string `json:"field,omitempty"`
+	kind string `json:"type, omitempty"`
+}
+
 func main() {
 
 	fmt.Println(startServer())
+
 }
 
 func startServer() error {
 
 	http.HandleFunc("/databases/", parse)
 	return http.ListenAndServe("127.0.0.1:8080", nil)
+
 }
 
 func parse(w http.ResponseWriter, r *http.Request) {
 
-	var responseType int
-	var requestType int
+	var responseType ResponseType
+	var requestType RequestType
 	u := strings.Split(r.URL.Path, "/")
 	l := len(u)
 	if u[l-1] == "" {
@@ -60,59 +79,81 @@ func parse(w http.ResponseWriter, r *http.Request) {
 
 	case "GET":
 
-		if l == 1 { // Databases list
+		if l == 2 { // Databases list
 			responseType = StringArray
 			requestType = DatabasesList
-		} else if l == 2 { // DB Tables list
+		} else if l == 3 { // DB Tables list
 			responseType = StringArray
 			requestType = TablesList
-			params["DatabaseName"] = u[1]
-		} else if l == 3 { // DB Concrete table
-			responseType = DictArray
-			requestType = WholeTable
-			params["DatabaseName"] = u[1]
-			params["TableName"] = u[2]
-		} else if l == 4 { // Table Row by id or condition
-			responseType = DictArray
-			requestType = TableQuery
-			params["DatabaseName"] = u[1]
-			params["TableName"] = u[2]
-			cc = parseCondition(u[3])
+			params[DatabaseName] = u[2]
+		} else if l == 4 { // DB Concrete table or query
+			conditionsQuery := r.URL.Query().Get("q")
+			if len(conditionsQuery) > 0 {
+				responseType = DictArray
+				requestType = TableQuery
+				cc = parseCondition(conditionsQuery)
+			} else {
+				responseType = DictArray
+				requestType = WholeTable
+			}
+			params[DatabaseName] = u[2]
+			params[TableName] = u[3]
+		} else if l == 5 { // single table element
+			params[DatabaseName] = u[2]
+			params[TableName] = u[3]
+			params[ElementIdentifier] = u[4]
+			requestType = TableElement
+			responseType = Dict
 		}
-	case "PUT":
-		if l == 2 { // create DB
+	case "POST":
+		if l == 3 { // create DB
 			responseType = Dict
 			requestType = CreateDatabase
-			params["DatabaseName"] = u[1]
-		} else if l == 3 { // create table in db
+			params[DatabaseName] = u[2]
+		} else if l == 4 { // insert element
+			urlParams := r.URL.Query()
+			if len (urlParams) > 0 {
+				responseType = Dict
+				requestType = InsertElement
+				params[DatabaseName] = u[2]
+				params[TableName] = u[3]
+				for key, value := range urlParams {
+					params[key] = value[0]
+				}
+			} else {
+				// TODO: report error to a user
+			}
+		} else if l == 5 { // create table
 			responseType = Dict
 			requestType = CreateTable
-			params["DatabaseName"] = u[1]
-			params["TableName"] = u[2]
-		} else if l == 4 { // create element
-			responseType = Dict
-			requestType = InsertElement
-			params["DatabaseName"] = u[1]
-			params["TableName"] = u[2]
-			cc = parseCondition(u[3])
+			params[DatabaseName] = u[2]
+			params[TableName] = u[3]
+			urlParams := r.URL.Query()
+			if len(urlParams) > 0 {
+				for key, value := range urlParams {
+					params[key] = value[0]
+				}
+			} else {
+				// TODO: report error to a user
+			}
 		}
-		fmt.Println("PUT ", r.URL.Path)
+		fmt.Println("POST ", r.URL.Path)
 	case "DELETE":
-		if l == 2 { // del DB
+		if l == 3 { // del DB
 			responseType = Dict
 			requestType = RemoveDatabase
-			params["DatabaseName"] = u[1]
-		} else if l == 3 { // Del table
+			params[DatabaseName] = u[2]
+		} else if l == 4 { // Del table
 			responseType = Dict
 			requestType = RemoveTable
-			params["DatabaseName"] = u[1]
-			params["TableName"] = u[2]
-		} else if l == 4 { // Del row from table
+			params[DatabaseName] = u[2]
+			params[TableName] = u[3]
+		} else if l == 5 { // Del row from table
 			responseType = Dict
 			requestType = RemoveElement
-			params["DatabaseName"] = u[1]
-			params["TableName"] = u[2]
-			cc = parseCondition(u[3])
+			params[DatabaseName] = u[2]
+			params[TableName] = u[3]
+			params[ElementIdentifier] = u[4]
 		}
 		fmt.Println("DELETE ", r.URL.Path)
 	}
@@ -124,25 +165,64 @@ func parse(w http.ResponseWriter, r *http.Request) {
 
 type condition struct {
 	name      string
-	operation string
+	operation ConditionOperation
 	value     string
 }
 
-func parseCondition(conditionStr string) []condition {
-	c := strings.Split(conditionStr, "&")
-	cc := []condition{}
-	if len(c) > 1 {
-		for _, item := range c {
-			temp := strings.Split(item, " ")
-			if len(temp) == 3 {
-				tc := condition{temp[0], temp[1], temp[2]}
-				cc = append(cc, tc)
-			}
+func clearEmptyStrings (originalSlice []string) []string {
+
+	clearSlice := make([]string, len(originalSlice))
+	nonEmptyStringsCount := 0
+
+	for _, t := range originalSlice {
+		if len(t) > 0 && t != " " {
+			clearSlice[nonEmptyStringsCount] = t
+			nonEmptyStringsCount += 1
 		}
-	} else {
-		tc := condition{"id", "=", c[0]}
-		cc = append(cc, tc)
 	}
+
+	return clearSlice[:nonEmptyStringsCount]
+
+}
+
+func parseCondition(conditionStr string) []condition {
+
+	rawConditions := strings.Split(conditionStr, " and ")
+
+	cc := make([]condition, len(rawConditions))
+
+	mainLoop:
+	for i, rawCondition := range rawConditions {
+
+		components := clearEmptyStrings(strings.Split(rawCondition, " "))
+
+		if len(components) < 3 {
+			continue mainLoop
+		}
+
+		fieldName := components[0]
+		value := components[2]
+		var operation ConditionOperation
+
+		switch components[1] {
+		case "mt":
+			operation = More
+		case "lt":
+			operation = Less
+		case "mgt":
+			operation = MoreOrEqual
+		case "lgt":
+			operation = LessOrEqual
+		case "equ":
+			operation = Equal
+		default:
+			continue mainLoop
+		}
+
+		cc[i] = condition { fieldName, operation, value }
+
+	}
+
 	return cc
 
 }
